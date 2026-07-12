@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -18,18 +20,18 @@ const (
 	FormatFLAC AudioFormat = "flac"
 )
 
-type PlaylistDownloadOption struct {
+type DownloadOption struct {
 	AudioFormat         AudioFormat
 	OutputFolderPath    string
 	ConcurrentFragments uint
 	Thumbnail           bool
-	PlayListUrl         string
+	Url                 string
 	FormatSelector      string
 	AudioQuality        string
 }
 
-func DownloadPlaylist(options PlaylistDownloadOption) error {
-
+func DownloadPlaylist(options DownloadOption) error {
+	slog.Info("Downloading Url", options.Url)
 	cmd := exec.Command(
 		"./binaries/yt-dlp.exe",
 		"--extract-audio",
@@ -44,15 +46,18 @@ func DownloadPlaylist(options PlaylistDownloadOption) error {
 		"--embed-metadata",
 		// how many pieces of a single video's stream download in parallel (default 1). Keep this modest — 4 is a reasonable ceiling. Going much higher (people report issues around 16) from one IP is what tends to trigger throttling/blocks.
 		"--concurrent-fragments", strconv.Itoa(int(options.ConcurrentFragments)),
-		"--parse-metadata", "%(artist,creator)s:%(meta_artist)s",
+		"--parse-metadata", "title:(?P<meta_artist>.+) - (?P<meta_title>.+)",
+		"--parse-metadata", "%(artist,creator,meta_artist)s:%(meta_artist)s",
 		// after_move is the only one guaranteed to fire after metadata embedding, thumbnail embedding, and the final file rename/move to its output path are all complete
 		"--print", "after_move:DONE %(id)s %(filepath)q",
 		// Output template: saves files into <OutputFolderPath>/<playlist name>/<title>.<ext>.
 		// %(playlist)s resolves to the playlist title. If the URL is a single video (no playlist),
 		// it falls back to the --output-na-placeholder value ("NA" by default).
-		"-o", getOutputTemplate(options.OutputFolderPath),
-		options.PlayListUrl,
+		"-o", options.OutputFolderPath,
+		options.Url,
 	)
+
+	cmd.Stderr = os.Stderr
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -76,19 +81,16 @@ func DownloadPlaylist(options PlaylistDownloadOption) error {
 		// Single file completed downloading if line starts with DONE
 		if strings.HasPrefix(line, "DONE") {
 			// TODO pass trackId to the next stage in pipeline
-			fmt.Println("DONE........ NEXT PIPELINE")
+			// This is important if i want to track download completion per playlist
 		}
 	}
 
 	// Block until process exits
 	err = cmd.Wait()
 	if err != nil {
+		fmt.Println(err)
+		panic(err)
 		return fmt.Errorf("error downloading playlist: %w", err)
-	}
-
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error downloading playlist: %w\noutput: %s", err, output)
 	}
 	return nil
 }

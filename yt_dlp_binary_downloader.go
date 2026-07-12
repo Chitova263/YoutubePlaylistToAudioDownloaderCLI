@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ type YtDlpBinaryDownloadOption struct {
 	Filename string
 }
 
-func DownloadYtDlpStandaloneBinary(binariesFolderPath string) error {
+func EnsureYtDlpInstalled() error {
 	platformBinaries := map[string]YtDlpBinaryDownloadOption{
 		"windows": {
 			URL:      "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
@@ -35,7 +36,7 @@ func DownloadYtDlpStandaloneBinary(binariesFolderPath string) error {
 		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 
-	pathToFile := filepath.Join(binariesFolderPath, ytDlpDownloadOption.Filename)
+	pathToFile := filepath.Join("binaries", ytDlpDownloadOption.Filename)
 
 	dir := filepath.Dir(pathToFile)
 
@@ -46,13 +47,15 @@ func DownloadYtDlpStandaloneBinary(binariesFolderPath string) error {
 
 	_, err = os.Stat(pathToFile)
 	if err == nil {
-		fmt.Println(pathToFile, "already exists")
+		slog.Info("yt-dlp binary found")
 		return nil
 	}
 
 	if !os.IsNotExist(err) {
 		return fmt.Errorf("failed to check %s: %w", pathToFile, err)
 	}
+
+	slog.Info("downloading yt-dlp binary", "url", ytDlpDownloadOption.URL)
 
 	response, err := http.Get(ytDlpDownloadOption.URL)
 	if err != nil {
@@ -79,6 +82,7 @@ func DownloadYtDlpStandaloneBinary(binariesFolderPath string) error {
 		return fmt.Errorf("failed to write %s: %w", pathToFile, err)
 	}
 
-	fmt.Println("Downloaded", pathToFile)
+	slog.Info("downloading yt-dlp binary success")
+
 	return nil
 }

@@ -7,8 +7,7 @@ import (
 )
 
 type PlaylistMetadataDownloadOptions struct {
-	PlayListUrl             string
-	SkipPlayListAfterErrors string
+	PlayListUrl string
 }
 
 func DownloadPlaylistMetadata(playlistMetadataDownloadOptions PlaylistMetadataDownloadOptions) (PlaylistMetadata, error) {
@@ -17,7 +16,7 @@ func DownloadPlaylistMetadata(playlistMetadataDownloadOptions PlaylistMetadataDo
 		"--flat-playlist", "-J",
 		"--no-warnings",
 		"--ignore-errors",
-		"--skip-playlist-after-errors", playlistMetadataDownloadOptions.SkipPlayListAfterErrors,
+		"--skip-playlist-after-errors", "5",
 		playlistMetadataDownloadOptions.PlayListUrl,
 	)
 
@@ -25,9 +24,6 @@ func DownloadPlaylistMetadata(playlistMetadataDownloadOptions PlaylistMetadataDo
 	if err != nil {
 		return PlaylistMetadata{}, fmt.Errorf("error downloading playlist metadata: %w\noutput: %s", err, output)
 	}
-
-	fmt.Println(string(output))
-
 	var playlistMetadata PlaylistMetadata
 	err = json.Unmarshal(output, &playlistMetadata)
 	if err != nil {
