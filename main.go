@@ -1,46 +1,75 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 	"os"
 	"path"
 	"sync"
+	"time"
 )
 
 func main() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
 	slog.SetDefault(logger)
 
 	err := EnsureYtDlpInstalled()
 	if err != nil {
+		slog.Error("failed to ensure yt-dlp is installed", "error", err)
 		os.Exit(1)
 	}
 
 	playListFilePath := "playlist.txt"
 	downloadsOutputFolderPath := "./output"
 	maxConcurrentDownloads := 5
+
+	slog.Info("starting playlist downloader",
+		"playlist_file", playListFilePath,
+		"output_dir", downloadsOutputFolderPath,
+		"max_concurrent_downloads", maxConcurrentDownloads,
+	)
+
 	playLists := GetPlaylistsFromPlaylistFile(playListFilePath)
+	slog.Info("loaded playlists", "count", len(playLists))
+
 	playlistMetadataChannel := MetadataExtractionStage(playLists)
 	downloadsChannel := DownloadPlaylistItemStage(maxConcurrentDownloads, playlistMetadataChannel, downloadsOutputFolderPath)
 
+	completed := 0
 	for entry := range downloadsChannel {
-		fmt.Printf("Downloaded %s\n", entry.URL)
+		completed++
+		slog.Info("download complete",
+			"video_id", entry.ID,
+			"title", entry.Title,
+			"url", entry.URL,
+			"total_completed", completed,
+		)
 	}
+
+	slog.Info("all downloads finished", "total_completed", completed)
 }
 
 func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChannel chan PlaylistMetadata, downloadsOutputFolderPath string) chan PlaylistEntry {
 	var wg sync.WaitGroup
 	downloadsChannel := make(chan PlaylistEntry, maxConcurrentDownloads)
 	sem := make(chan struct{}, maxConcurrentDownloads)
+
 	go func() {
 		for metadata := range playlistMetadataChannel {
+			slog.Info("processing playlist",
+				"playlist_id", metadata.ID,
+				"playlist_title", metadata.Title,
+				"track_count", len(metadata.Entries),
+			)
+
 			for _, entry := range metadata.Entries {
 				wg.Add(1)
 				sem <- struct{}{} // acquire slot, blocks if max concurrent reached
 				go func(playlistEntry PlaylistEntry) {
 					defer wg.Done()
 					defer func() { <-sem }() // release slot
+
 					options := DownloadOption{
 						AudioFormat:         FormatMP3,
 						OutputFolderPath:    path.Join(downloadsOutputFolderPath, metadata.Title, playlistEntry.Title),
@@ -51,15 +80,37 @@ func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChann
 						AudioQuality:        "0",
 					}
 
-					slog.Info("Downloading playlist item", "Playlist Id", metadata.ID, "Playlist Title", metadata.Title, "ItemId", playlistEntry.ID, "ItemTitle", playlistEntry.Title)
+					slog.Info("download started",
+						"playlist_id", metadata.ID,
+						"playlist_title", metadata.Title,
+						"video_id", playlistEntry.ID,
+						"video_title", playlistEntry.Title,
+					)
 
+					start := time.Now()
 					err := DownloadPlaylist(options)
+					duration := time.Since(start)
+
 					if err != nil {
-						slog.Error("Error Playlist Metadata", "Title", metadata.Title, "VideoCount", len(metadata.Entries), err.Error())
+						slog.Error("download failed",
+							"playlist_id", metadata.ID,
+							"playlist_title", metadata.Title,
+							"video_id", playlistEntry.ID,
+							"video_title", playlistEntry.Title,
+							"duration_ms", duration.Milliseconds(),
+							"error", err,
+						)
 						return
 					}
+
+					slog.Info("download succeeded",
+						"playlist_id", metadata.ID,
+						"playlist_title", metadata.Title,
+						"video_id", playlistEntry.ID,
+						"video_title", playlistEntry.Title,
+						"duration_ms", duration.Milliseconds(),
+					)
 					downloadsChannel <- playlistEntry
-					slog.Info("Downloaded playlist item", "Playlist Id", metadata.ID, "Playlist Title", metadata.Title, "ItemId", playlistEntry.ID, "ItemTitle", playlistEntry.Title)
 
 				}(entry)
 			}
@@ -73,19 +124,35 @@ func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChann
 func MetadataExtractionStage(playLists []string) chan PlaylistMetadata {
 	var wg sync.WaitGroup
 	playlistMetadataChannel := make(chan PlaylistMetadata, len(playLists))
+
 	for _, playListDownloadUrl := range playLists {
 		wg.Add(1)
 		go func(url string) {
 			defer wg.Done()
+
+			start := time.Now()
 			metadata, err := DownloadPlaylistMetadata(PlaylistMetadataDownloadOptions{
 				PlayListUrl: url,
 			})
-			if err != nil {
-				fmt.Println(err)
-			}
-			playlistMetadataChannel <- metadata
-			slog.Info("Downloaded Playlist Metadata", "Title", metadata.Title, "VideoCount", len(metadata.Entries), "Playlist URL", url)
+			duration := time.Since(start)
 
+			if err != nil {
+				slog.Error("metadata extraction failed",
+					"playlist_url", url,
+					"duration_ms", duration.Milliseconds(),
+					"error", err,
+				)
+				return
+			}
+
+			playlistMetadataChannel <- metadata
+			slog.Info("metadata extraction succeeded",
+				"playlist_id", metadata.ID,
+				"playlist_title", metadata.Title,
+				"track_count", len(metadata.Entries),
+				"playlist_url", url,
+				"duration_ms", duration.Milliseconds(),
+			)
 		}(playListDownloadUrl)
 	}
 

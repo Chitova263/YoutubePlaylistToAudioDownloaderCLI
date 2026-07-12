@@ -2,14 +2,14 @@ package main
 
 import (
 	"bufio"
-	"fmt"
+	"log/slog"
 	"os"
 )
 
 func GetPlaylistsFromPlaylistFile(playListFilePath string) []string {
 	playlistFile, err := os.Open(playListFilePath)
 	if err != nil {
-		fmt.Println(err)
+		slog.Error("failed to open playlist file", "path", playListFilePath, "error", err)
 		os.Exit(1)
 	}
 	defer playlistFile.Close()
@@ -18,7 +18,10 @@ func GetPlaylistsFromPlaylistFile(playListFilePath string) []string {
 	scanner := bufio.NewScanner(reader)
 	var playLists []string
 	for scanner.Scan() {
-		playLists = append(playLists, scanner.Text())
+		line := scanner.Text()
+		if line != "" {
+			playLists = append(playLists, line)
+		}
 	}
 	return playLists
 }

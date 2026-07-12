@@ -37,7 +37,6 @@ func EnsureYtDlpInstalled() error {
 	}
 
 	pathToFile := filepath.Join("binaries", ytDlpDownloadOption.Filename)
-
 	dir := filepath.Dir(pathToFile)
 
 	err := os.MkdirAll(dir, 0755)
@@ -47,7 +46,7 @@ func EnsureYtDlpInstalled() error {
 
 	_, err = os.Stat(pathToFile)
 	if err == nil {
-		slog.Info("yt-dlp binary found")
+		slog.Info("yt-dlp binary already installed", "path", pathToFile)
 		return nil
 	}
 
@@ -55,18 +54,13 @@ func EnsureYtDlpInstalled() error {
 		return fmt.Errorf("failed to check %s: %w", pathToFile, err)
 	}
 
-	slog.Info("downloading yt-dlp binary", "url", ytDlpDownloadOption.URL)
+	slog.Info("downloading yt-dlp binary", "url", ytDlpDownloadOption.URL, "destination", pathToFile)
 
 	response, err := http.Get(ytDlpDownloadOption.URL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			os.Exit(1)
-		}
-	}(response.Body)
+	defer response.Body.Close()
 
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed: unexpected status %d", response.StatusCode)
@@ -82,7 +76,6 @@ func EnsureYtDlpInstalled() error {
 		return fmt.Errorf("failed to write %s: %w", pathToFile, err)
 	}
 
-	slog.Info("downloading yt-dlp binary success")
-
+	slog.Info("yt-dlp binary installed successfully", "path", pathToFile)
 	return nil
 }

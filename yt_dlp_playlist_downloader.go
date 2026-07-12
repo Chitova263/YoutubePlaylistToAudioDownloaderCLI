@@ -31,7 +31,7 @@ type DownloadOption struct {
 }
 
 func DownloadPlaylist(options DownloadOption) error {
-	slog.Info("Downloading Url", options.Url)
+	slog.Info("executing yt-dlp", "url", options.Url, "format", options.AudioFormat, "output_path", options.OutputFolderPath)
 	cmd := exec.Command(
 		"./binaries/yt-dlp.exe",
 		"--extract-audio",
@@ -78,18 +78,17 @@ func DownloadPlaylist(options DownloadOption) error {
 	scanner.Split(bufio.ScanLines)
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Println(line)
+		slog.Debug("yt-dlp output", "url", options.Url, "line", line)
 		// Single file completed downloading if line starts with DONE
 		if strings.HasPrefix(line, "DONE") {
-			// TODO pass trackId to the next stage in pipeline
-			// This is important if i want to track download completion per playlist
+			slog.Info("track download complete", "url", options.Url, "output", line)
 		}
 	}
 
 	// Block until process exits
 	err = cmd.Wait()
 	if err != nil {
-		slog.Error("Download error", err.Error())
+		slog.Error("yt-dlp process exited with error", "url", options.Url, "error", err)
 		return fmt.Errorf("download error: %w", err)
 	}
 	return nil
