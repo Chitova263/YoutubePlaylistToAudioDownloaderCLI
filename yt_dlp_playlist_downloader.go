@@ -39,6 +39,7 @@ func DownloadPlaylist(options DownloadOption) error {
 		"--audio-format", string(options.AudioFormat),
 		// 0 (best, VBR) to 10 (worst), or an explicit bitrate like 192K. Use 0 for maximum, since you said the highest quality. If you want deterministic file sizes across a big library, use a fixed constant bitrate like 320K instead of VBR 0
 		"--audio-quality", options.AudioQuality,
+		"--cookies", "./cookies.txt",
 		// format selector. bestaudio picks the highest-bitrate audio-only stream (usually 160-256kbps Opus); falls back to best (a muxed video+audio stream) only if no audio-only stream exists. This is the right selector for "highest quality audio" — don't hardcode a format id, YouTube's available streams change per video.
 		"-f", options.FormatSelector,
 		// embeds the video thumbnail as cover art (needs mutagen or ffmpeg). This is what gives you the "Spotify/iTunes-style" look with album art in Serato/Rekordbox browsers.
@@ -88,9 +89,8 @@ func DownloadPlaylist(options DownloadOption) error {
 	// Block until process exits
 	err = cmd.Wait()
 	if err != nil {
-		fmt.Println(err)
-		panic(err)
-		return fmt.Errorf("error downloading playlist: %w", err)
+		slog.Error("Download error", err.Error())
+		return fmt.Errorf("download error: %w", err)
 	}
 	return nil
 }

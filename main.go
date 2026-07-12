@@ -19,7 +19,7 @@ func main() {
 
 	playListFilePath := "playlist.txt"
 	downloadsOutputFolderPath := "./output"
-	maxConcurrentDownloads := 2
+	maxConcurrentDownloads := 5
 	playLists := GetPlaylistsFromPlaylistFile(playListFilePath)
 	playlistMetadataChannel := MetadataExtractionStage(playLists)
 	downloadsChannel := DownloadPlaylistItemStage(maxConcurrentDownloads, playlistMetadataChannel, downloadsOutputFolderPath)
@@ -27,36 +27,20 @@ func main() {
 	for entry := range downloadsChannel {
 		fmt.Printf("Downloaded %s\n", entry.URL)
 	}
-
-	//if !isAdvanced {
-	//	for _, playList := range playLists {
-	//		options := DownloadOption{
-	//			AudioFormat:         FormatMP3,
-	//			OutputFolderPath:    downloadsOutputFolderPath,
-	//			ConcurrentFragments: 4,
-	//			Thumbnail:           false,
-	//			Url:         playList,
-	//			FormatSelector:      "bestaudio/best",
-	//			AudioQuality:        "0",
-	//		}
-	//
-	//		err = DownloadPlaylist(options)
-	//		if err != nil {
-	//			os.Exit(1)
-	//		}
-	//	}
-	//}
 }
 
 func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChannel chan PlaylistMetadata, downloadsOutputFolderPath string) chan PlaylistEntry {
 	var wg sync.WaitGroup
 	downloadsChannel := make(chan PlaylistEntry, maxConcurrentDownloads)
+	sem := make(chan struct{}, maxConcurrentDownloads)
 	go func() {
 		for metadata := range playlistMetadataChannel {
 			for _, entry := range metadata.Entries {
 				wg.Add(1)
+				sem <- struct{}{} // acquire slot, blocks if max concurrent reached
 				go func(playlistEntry PlaylistEntry) {
 					defer wg.Done()
+					defer func() { <-sem }() // release slot
 					options := DownloadOption{
 						AudioFormat:         FormatMP3,
 						OutputFolderPath:    path.Join(downloadsOutputFolderPath, metadata.Title, playlistEntry.Title),
@@ -71,8 +55,7 @@ func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChann
 
 					err := DownloadPlaylist(options)
 					if err != nil {
-						slog.Info("Error Playlist Metadata", "Title", metadata.Title, "VideoCount", len(metadata.Entries))
-						fmt.Println(err.Error())
+						slog.Error("Error Playlist Metadata", "Title", metadata.Title, "VideoCount", len(metadata.Entries), err.Error())
 						return
 					}
 					downloadsChannel <- playlistEntry
