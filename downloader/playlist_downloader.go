@@ -17,10 +17,6 @@ type DownloadOptions struct {
 }
 
 func Download(options DownloadOptions) {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
 
 	err := EnsureYtDlpInstalled()
 	if err != nil {

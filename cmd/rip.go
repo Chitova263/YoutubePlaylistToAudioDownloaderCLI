@@ -2,8 +2,10 @@ package cmd
 
 import (
 	"YoutubePlaylistDownloader/downloader"
+	"log/slog"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var ripCmd = &cobra.Command{
@@ -18,18 +20,22 @@ set by --max-parallel-downloads.
 
 Requires yt-dlp and ffmpeg to be installed and available on PATH.`,
 	Example: `  # Download a playlist as mp3 (default)
-  ytpdl rip --url "https://youtube.com/playlist?list=PLxxxxxxx"
+  ripper rip --url "https://youtube.com/playlist?list=PLxxxxxxx"
 
   # Download as WAV to a custom directory with 4 parallel downloads
-  ytpdl rip --url "https://youtube.com/playlist?list=PLxxxxxxx" \
+  ripper rip --url "https://youtube.com/playlist?list=PLxxxxxxx" \
     --format wav --output ~/Music/playlist --max-parallel-downloads 4`,
-	Run: func(cmd *cobra.Command, args []string) {
-		// Extract flags from cli
-		url, _ := cmd.Flags().GetString("url")
-		format, _ := cmd.Flags().GetString("format")
-		playlist, _ := cmd.Flags().GetString("playlist")
-		output, _ := cmd.Flags().GetString("output")
-		maxParallelDownloads, _ := cmd.Flags().GetInt("max-parallel-downloads")
+	RunE: func(cmd *cobra.Command, args []string) error {
+
+		url, err := cmd.Flags().GetString("url")
+		cobra.CheckErr(err)
+
+		format := viper.GetString("format")
+		playlist := viper.GetString("playlist")
+		output := viper.GetString("output")
+		maxParallelDownloads := viper.GetInt("max-parallel-downloads")
+
+		slog.Debug("Flags", "format", format, "playlist", playlist, "output", output, "max-parallel-downloads", maxParallelDownloads, "url", url)
 
 		downloader.Download(downloader.DownloadOptions{
 			Url:                  url,
@@ -38,6 +44,7 @@ Requires yt-dlp and ffmpeg to be installed and available on PATH.`,
 			MaxParallelDownloads: maxParallelDownloads,
 			Playlists:            playlist,
 		})
+		return nil
 	},
 }
 
@@ -52,8 +59,22 @@ func init() {
 	// Cobra supports local flags which will only run when this command
 	// is called directly
 	ripCmd.Flags().String("url", "", "YouTube playlist url")
-	ripCmd.Flags().String("format", "mp3", "Output format")
-	ripCmd.Flags().String("output", ".", "Output directory")
-	ripCmd.Flags().String("playlist", "", "Playlist to download")
-	ripCmd.Flags().Int("max-parallel-downloads", 2, "Maximum number of Parallel Downloads")
+	format := "format"
+	ripCmd.Flags().String(format, "mp3", "Output format")
+	output := "output"
+	ripCmd.Flags().String(output, ".", "Output directory")
+	playlist := "playlist"
+	ripCmd.Flags().String(playlist, "", "Playlist to download")
+	maxParallelDownloads := "max-parallel-downloads"
+	ripCmd.Flags().Int(maxParallelDownloads, 2, "Maximum number of Parallel Downloads")
+
+	// Bind flags to viper configuration manager
+	err := viper.BindPFlag(format, ripCmd.Flags().Lookup(format))
+	cobra.CheckErr(err)
+	err = viper.BindPFlag(output, ripCmd.Flags().Lookup(output))
+	cobra.CheckErr(err)
+	err = viper.BindPFlag(playlist, ripCmd.Flags().Lookup(playlist))
+	cobra.CheckErr(err)
+	err = viper.BindPFlag(maxParallelDownloads, ripCmd.Flags().Lookup(maxParallelDownloads))
+	cobra.CheckErr(err)
 }
