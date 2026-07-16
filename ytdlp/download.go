@@ -1,4 +1,4 @@
-package downloader
+package ytdlp
 
 import (
 	"bufio"
@@ -32,8 +32,20 @@ type DownloadOption struct {
 
 func DownloadPlaylist(options DownloadOption) error {
 	slog.Info("executing yt-dlp", "url", options.Url, "format", options.AudioFormat, "output_path", options.OutputFolderPath)
+	// -4 forces IPv4. Without it, yt-dlp may attempt IPv6 connections that hang
+	// indefinitely on systems with broken or incomplete IPv6 connectivity.
+	//
+	// Many machines have IPv6 enabled at the OS level but lack a fully functional
+	// end-to-end IPv6 route to YouTube's servers. When yt-dlp resolves youtube.com,
+	// the OS returns both IPv6 and IPv4 addresses. yt-dlp tries IPv6 first (preferred
+	// by default), but if the connection attempt goes into a black hole (no response,
+	// no rejection), it waits forever since there's no built-in timeout.
+	//
+	// Unlike curl (which uses "Happy Eyeballs" to race IPv6 and IPv4 simultaneously),
+	// yt-dlp just tries one protocol and blocks. Forcing IPv4 sidesteps the issue entirely.
 	cmd := exec.Command(
 		"./binaries/yt-dlp.exe",
+		"-4",
 		"--extract-audio",
 		//  strips video, keeps only audio. Requires ffmpeg/ffprobe installed.
 		"--audio-format", string(options.AudioFormat),
@@ -92,8 +104,4 @@ func DownloadPlaylist(options DownloadOption) error {
 		return fmt.Errorf("download error: %w", err)
 	}
 	return nil
-}
-
-func getOutputTemplate(path string) string {
-	return path + "/%(playlist)s/%(title)s.%(ext)s"
 }

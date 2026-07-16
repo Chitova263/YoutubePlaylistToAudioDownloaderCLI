@@ -1,4 +1,4 @@
-package downloader
+package ytdlp
 
 import (
 	"fmt"
@@ -10,13 +10,13 @@ import (
 	"runtime"
 )
 
-type YtDlpBinaryDownloadOption struct {
+type BinaryDownloadOption struct {
 	URL      string
 	Filename string
 }
 
 func EnsureYtDlpInstalled() error {
-	platformBinaries := map[string]YtDlpBinaryDownloadOption{
+	platformBinaries := map[string]BinaryDownloadOption{
 		"windows": {
 			URL:      "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe",
 			Filename: "yt-dlp.exe",

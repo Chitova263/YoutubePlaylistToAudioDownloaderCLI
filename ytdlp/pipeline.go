@@ -1,40 +1,50 @@
-package downloader
+package ytdlp
 
 import (
+	"YoutubePlaylistDownloader/playlist"
 	"log/slog"
-	"os"
 	"path"
+	"slices"
 	"sync"
 	"time"
 )
 
 type DownloadOptions struct {
-	Url                  string
-	Format               string
-	Output               string
-	MaxParallelDownloads int
-	Playlists            string
+	AudioFormat string
+	Output      string
+	Input       string
+	Playlists   []string
+	Parallel    uint
+	Concurrency uint
 }
 
-func Download(options DownloadOptions) {
+func Download(options DownloadOptions) error {
 
 	err := EnsureYtDlpInstalled()
 	if err != nil {
-		slog.Error("failed to ensure yt-dlp is installed", "error", err)
-		os.Exit(1)
+		return err
 	}
 
-	slog.Info("starting playlist downloader",
-		"playlist_file", options.Playlists,
-		"output_dir", options.Output,
-		"max_concurrent_downloads", options.MaxParallelDownloads,
-	)
+	slog.Debug("Download options", "options", options)
 
-	playLists := GetPlaylistsFromPlaylistFile(options.Playlists)
-	slog.Info("loaded playlists", "count", len(playLists))
+	var playLists []string
+	if options.Input != "" {
+		playLists = playlist.GetPlaylistsFromPlaylistFile(options.Input)
+
+		if len(playLists) < 1 {
+			slog.Info("File has no playlists to download", "file", options.Input)
+			return nil
+		}
+		slog.Info("Extracted playlists from txt file", "playlists", len(playLists))
+		slog.Debug("Extracted playlists from file", "playlists", playLists)
+	}
+	playLists = slices.Concat(playLists, options.Playlists)
+
+	slog.Debug("Playlists", "playlists", playLists)
 
 	playlistMetadataChannel := MetadataExtractionStage(playLists)
-	downloadsChannel := DownloadPlaylistItemStage(options.MaxParallelDownloads, playlistMetadataChannel, options.Output)
+
+	downloadsChannel := DownloadPlaylistItemStage(options.Parallel, playlistMetadataChannel, options.Output)
 
 	completed := 0
 	for entry := range downloadsChannel {
@@ -48,11 +58,12 @@ func Download(options DownloadOptions) {
 	}
 
 	slog.Info("all downloads finished", "total_completed", completed)
+	return nil
 }
 
-func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChannel chan PlaylistMetadata, downloadsOutputFolderPath string) chan PlaylistEntry {
+func DownloadPlaylistItemStage(maxConcurrentDownloads uint, playlistMetadataChannel chan playlist.PlaylistMetadata, downloadsOutputFolderPath string) chan playlist.PlaylistEntry {
 	var wg sync.WaitGroup
-	downloadsChannel := make(chan PlaylistEntry, maxConcurrentDownloads)
+	downloadsChannel := make(chan playlist.PlaylistEntry, maxConcurrentDownloads)
 	sem := make(chan struct{}, maxConcurrentDownloads)
 
 	go func() {
@@ -66,7 +77,7 @@ func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChann
 			for _, entry := range metadata.Entries {
 				wg.Add(1)
 				sem <- struct{}{} // acquire slot, blocks if max concurrent reached
-				go func(playlistEntry PlaylistEntry) {
+				go func(playlistEntry playlist.PlaylistEntry) {
 					defer wg.Done()
 					defer func() { <-sem }() // release slot
 
@@ -121,9 +132,11 @@ func DownloadPlaylistItemStage(maxConcurrentDownloads int, playlistMetadataChann
 	return downloadsChannel
 }
 
-func MetadataExtractionStage(playLists []string) chan PlaylistMetadata {
+func MetadataExtractionStage(playLists []string) chan playlist.PlaylistMetadata {
+	slog.Debug("Playlist metadata extraction", "playlists", playLists)
+
 	var wg sync.WaitGroup
-	playlistMetadataChannel := make(chan PlaylistMetadata, len(playLists))
+	playlistMetadataChannel := make(chan playlist.PlaylistMetadata, len(playLists))
 
 	for _, playListDownloadUrl := range playLists {
 		wg.Add(1)
@@ -146,11 +159,11 @@ func MetadataExtractionStage(playLists []string) chan PlaylistMetadata {
 			}
 
 			playlistMetadataChannel <- metadata
-			slog.Info("metadata extraction succeeded",
+
+			slog.Info("Playlist metadata extraction success",
 				"playlist_id", metadata.ID,
 				"playlist_title", metadata.Title,
 				"track_count", len(metadata.Entries),
-				"playlist_url", url,
 				"duration_ms", duration.Milliseconds(),
 			)
 		}(playListDownloadUrl)

@@ -14,7 +14,7 @@ var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "ripper",
+	Use:   "ripper [command]",
 	Short: "Download YouTube playlists and convert them to audio",
 	Long: `ripper downloads videos from a YouTube playlist and converts them
 into audio files (e.g. mp3, wav) for offline listening.
@@ -43,12 +43,12 @@ func init() {
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.ripper.yaml)")
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.YoutubePlaylistDownloader.yaml)")
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "", "$HOME/.ripper.yaml", "path to configuration yaml")
+	err := rootCmd.MarkPersistentFlagFilename("config", "yaml")
+	cobra.CheckErr(err)
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
 func InitializeConfig() {
@@ -60,11 +60,11 @@ func InitializeConfig() {
 		cobra.CheckErr(err)
 		viper.AddConfigPath(homeDir)
 		viper.SetConfigType("yaml")
-		viper.SetConfigName(".ytpdl") // filename without extension
+		viper.SetConfigName(".ripr") // filename without extension
 	}
 
 	// Environment variables
-	viper.SetEnvPrefix("ytpdl") // env vars must start with YTPDL_
+	viper.SetEnvPrefix("RIPR_") // env vars must start with YTPDL_
 	viper.AutomaticEnv()        // enable reading from env vars
 
 	if err := viper.ReadInConfig(); err == nil {
@@ -76,7 +76,8 @@ func InitializeConfig() {
 
 func SetupLogger() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		AddSource: false,
+		Level:     slog.LevelDebug,
 	}))
 	slog.SetDefault(logger)
 	slog.Debug("Logger initialized")

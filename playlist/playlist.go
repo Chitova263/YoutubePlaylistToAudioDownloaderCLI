@@ -1,4 +1,4 @@
-package downloader
+package playlist
 
 // Thumbnail represents a video/playlist thumbnail at a specific resolution.
 type Thumbnail struct {
