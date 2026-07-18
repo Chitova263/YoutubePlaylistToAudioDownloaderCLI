@@ -2,26 +2,42 @@ package playlist
 
 import (
 	"bufio"
+	"fmt"
 	"log/slog"
 	"os"
 )
 
-func GetPlaylistsFromPlaylistFile(playListFilePath string) []string {
-	playlistFile, err := os.Open(playListFilePath)
+// GetPlaylistsFromPlaylistFile reads playlist URLs from a text file (one per line).
+// Empty lines are skipped.
+func GetPlaylistsFromPlaylistFile(filePath string) []string {
+	log := slog.Default().With("component", "playlist")
+
+	log.Debug("reading playlist file", "path", filePath)
+
+	file, err := os.Open(filePath)
 	if err != nil {
-		slog.Error("failed to open playlist file", "path", playListFilePath, "error", err)
+		// Fatal: if the user specified --input, the file must exist
+		log.Error("failed to open playlist file", "path", filePath, "error", err)
+		fmt.Fprintf(os.Stderr, "Error: cannot open playlist file %q: %v\n", filePath, err)
 		os.Exit(1)
 	}
-	defer playlistFile.Close()
+	defer file.Close()
 
-	reader := bufio.NewReader(playlistFile)
-	scanner := bufio.NewScanner(reader)
-	var playLists []string
+	scanner := bufio.NewScanner(bufio.NewReader(file))
+	var playlists []string
+	lineNum := 0
 	for scanner.Scan() {
+		lineNum++
 		line := scanner.Text()
 		if line != "" {
-			playLists = append(playLists, line)
+			playlists = append(playlists, line)
 		}
 	}
-	return playLists
+
+	if err := scanner.Err(); err != nil {
+		log.Error("error reading playlist file", "path", filePath, "error", err)
+	}
+
+	log.Debug("playlist file parsed", "path", filePath, "lines_read", lineNum, "urls_found", len(playlists))
+	return playlists
 }

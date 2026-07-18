@@ -1,32 +1,24 @@
 package ripper
 
 import (
+	"YoutubePlaylistDownloader/logging"
 	"YoutubePlaylistDownloader/playlist"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os/exec"
 )
+
+// metaLog is the component logger for metadata extraction.
+var metaLog = logging.Component("metadata")
 
 type PlaylistMetadataDownloadOptions struct {
 	PlayListUrl string
 }
 
-func DownloadPlaylistMetadata(playlistMetadataDownloadOptions PlaylistMetadataDownloadOptions) (playlist.PlaylistMetadata, error) {
+func DownloadPlaylistMetadata(opts PlaylistMetadataDownloadOptions) (playlist.PlaylistMetadata, error) {
+	metaLog.Debug("fetching playlist metadata", "url", opts.PlayListUrl)
 
-	slog.Debug("Downloading Playlist metadata", "options", playlistMetadataDownloadOptions)
-
-	// -4 forces IPv4. Without it, yt-dlp may attempt IPv6 connections that hang
-	// indefinitely on systems with broken or incomplete IPv6 connectivity.
-	//
-	// Many machines have IPv6 enabled at the OS level but lack a fully functional
-	// end-to-end IPv6 route to YouTube's servers. When yt-dlp resolves youtube.com,
-	// the OS returns both IPv6 and IPv4 addresses. yt-dlp tries IPv6 first (preferred
-	// by default), but if the connection attempt goes into a black hole (no response,
-	// no rejection), it waits forever since there's no built-in timeout.
-	//
-	// Unlike curl (which uses "Happy Eyeballs" to race IPv6 and IPv4 simultaneously),
-	// yt-dlp just tries one protocol and blocks. Forcing IPv4 sidesteps the issue entirely.
+	// -4 forces IPv4 (see download.go for rationale)
 	cmd := exec.Command(
 		"./binaries/yt-dlp.exe",
 		"-4",
@@ -35,20 +27,28 @@ func DownloadPlaylistMetadata(playlistMetadataDownloadOptions PlaylistMetadataDo
 		"--ignore-errors",
 		"--yes-playlist",
 		"--skip-playlist-after-errors", "5",
-		playlistMetadataDownloadOptions.PlayListUrl,
+		opts.PlayListUrl,
 	)
+
+	logging.Trace("yt-dlp metadata command", "args", cmd.Args)
 
 	output, err := cmd.Output()
 	if err != nil {
-		return playlist.PlaylistMetadata{}, fmt.Errorf("error downloading playlist metadata: %w\noutput: %s", err, output)
-	}
-	var playlistMetadata playlist.PlaylistMetadata
-	err = json.Unmarshal(output, &playlistMetadata)
-	if err != nil {
-		return playlist.PlaylistMetadata{}, fmt.Errorf("error parsing playlist metadata: %w\noutput: %s", err, output)
+		return playlist.PlaylistMetadata{}, fmt.Errorf("yt-dlp metadata fetch failed: %w", err)
 	}
 
-	slog.Debug("Downloaded playlist metadata", "metadata", playlistMetadata)
+	logging.Trace("raw metadata response", "bytes", len(output))
 
-	return playlistMetadata, nil
+	var metadata playlist.PlaylistMetadata
+	if err := json.Unmarshal(output, &metadata); err != nil {
+		return playlist.PlaylistMetadata{}, fmt.Errorf("parsing playlist metadata: %w", err)
+	}
+
+	metaLog.Debug("metadata parsed",
+		"playlist_id", metadata.ID,
+		"title", metadata.Title,
+		"entries", len(metadata.Entries),
+	)
+
+	return metadata, nil
 }

@@ -4,8 +4,7 @@ Rip audio from YouTube playlists.
 
 ## Requirements
 
-- [ffmpeg](https://ffmpeg.org/download.html) on PATH
-- `yt-dlp` is fetched automatically on first run
+- `ffmpeg` and `yt-dlp` are fetched automatically on first run
 
 ## Install
 

@@ -1,8 +1,7 @@
-// Package cmd /*
 package cmd
 
 import (
-	"fmt"
+	"YoutubePlaylistDownloader/logging"
 	"log/slog"
 	"os"
 
@@ -10,7 +9,14 @@ import (
 	"github.com/spf13/viper"
 )
 
-var cfgFile string
+// Build-time variables (set via -ldflags)
+var version = "dev"
+
+var (
+	cfgFile   string
+	verbosity int
+	logFormat string
+)
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -21,15 +27,11 @@ into audio files (e.g. mp3, wav) for offline listening.
 
 Example:
   ripper rip --url "https://youtube.com/playlist?list=XXXX" --format mp3 --output ./downloads`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
-	fmt.Println("Root Command Execution")
 	err := rootCmd.Execute()
 	if err != nil {
 		os.Exit(1)
@@ -37,48 +39,63 @@ func Execute() {
 }
 
 func init() {
-	// Runs after flags have been initialized and before RunE / Run
-	cobra.OnInitialize(SetupLogger, InitializeConfig)
+	cobra.OnInitialize(initLogging, initConfig)
 
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "", "$HOME/.ripper.yaml", "path to configuration yaml")
-	err := rootCmd.MarkPersistentFlagFilename("config", "yaml")
-	cobra.CheckErr(err)
+	// Global flags available to all subcommands
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "path to config yaml (default $HOME/.ripper.yaml)")
+	_ = rootCmd.MarkPersistentFlagFilename("config", "yaml")
 
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
+	// Verbosity: -v N
+	// Default is 2 (INFO). Users can also use --quiet/-q (sets to 0) or --verbose (sets to 3).
+	rootCmd.PersistentFlags().IntVarP(&verbosity, "verbosity", "v", 2, "log verbosity level (0=quiet, 1=warn, 2=info, 3=debug, 4=trace)")
+	rootCmd.PersistentFlags().BoolP("quiet", "q", false, "suppress all output except errors (equivalent to -v 0)")
+	rootCmd.PersistentFlags().BoolP("debug", "d", false, "enable debug output (equivalent to -v 3)")
+
+	// Log format: text (default, human-readable) or json (machine-parseable for log aggregators)
+	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log output format: text or json")
 }
 
-func InitializeConfig() {
+func initLogging() {
+	// Convenience aliases override the numeric verbosity
+	if q, _ := rootCmd.PersistentFlags().GetBool("quiet"); q {
+		verbosity = 0
+	}
+	if d, _ := rootCmd.PersistentFlags().GetBool("debug"); d {
+		verbosity = 3
+	}
+
+	format := logging.FormatText
+	if logFormat == "json" {
+		format = logging.FormatJSON
+	}
+
+	logging.Setup(logging.Config{
+		Verbosity: verbosity,
+		Format:    format,
+		Output:    os.Stderr,
+		Component: "ripper",
+		Version:   version,
+	})
+
+	slog.Debug("logger initialized", "verbosity", verbosity, "format", logFormat)
+}
+
+func initConfig() {
 	if cfgFile != "" {
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// Check default location if no configuration is given
 		homeDir, err := os.UserHomeDir()
 		cobra.CheckErr(err)
 		viper.AddConfigPath(homeDir)
 		viper.SetConfigType("yaml")
-		viper.SetConfigName(".ripr") // filename without extension
+		viper.SetConfigName(".ripper")
 	}
 
-	// Environment variables
-	viper.SetEnvPrefix("RIPR_") // env vars must start with YTPDL_
-	viper.AutomaticEnv()        // enable reading from env vars
+	viper.SetEnvPrefix("RIPPER")
+	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err == nil {
-		slog.Info("Using config file", "path", viper.ConfigFileUsed())
+		slog.Info("loaded config file", "path", viper.ConfigFileUsed())
 	}
-	// note: if err != nil here, we just proceed with defaults —
-	// a missing config file is not fatal
-}
-
-func SetupLogger() {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: false,
-		Level:     slog.LevelDebug,
-	}))
-	slog.SetDefault(logger)
-	slog.Debug("Logger initialized")
+	// Missing config file is not fatal — proceed with defaults + flags
 }
