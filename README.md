@@ -1,5 +1,8 @@
 # ripper
 
+![Downloads](https://img.shields.io/github/downloads/Chitova263/YoutubePlaylistToAudioDownloaderCLI/total)
+![Release](https://img.shields.io/github/v/release/Chitova263/YoutubePlaylistToAudioDownloaderCLI)
+
 Rip audio from YouTube playlists.
 
 ## Requirements
