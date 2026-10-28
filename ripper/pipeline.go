@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 // log is the component logger for the pipeline package.
-// Every log line from this package carries component=pipeline.
 var log = logging.Component("pipeline")
 
 type DownloadOptions struct {
@@ -25,6 +25,11 @@ type DownloadOptions struct {
 	Playlists   []string
 	Parallel    uint
 	Concurrency uint
+	// Context controls cancellation. When nil, a background context is used
+	// and SIGINT/SIGTERM will trigger cancellation (CLI behaviour).
+	Context context.Context
+	// Events holds optional callbacks for real-time download progress.
+	Events EventHandler
 }
 
 func Download(options DownloadOptions) error {
@@ -34,17 +39,23 @@ func Download(options DownloadOptions) error {
 		"parallel", options.Parallel,
 	)
 
-	// Set up graceful shutdown: cancel context on SIGINT/SIGTERM.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	var ctx context.Context
+	var cancel context.CancelFunc
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
-	go func() {
-		sig := <-sigCh
-		log.Warn("received shutdown signal, finishing in-flight downloads...", "signal", sig)
-		cancel()
-	}()
+	if options.Context != nil {
+		ctx, cancel = context.WithCancel(options.Context)
+	} else {
+		// CLI mode: handle OS signals ourselves.
+		ctx, cancel = context.WithCancel(context.Background())
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+		go func() {
+			sig := <-sigCh
+			log.Warn("received shutdown signal, finishing in-flight downloads...", "signal", sig)
+			cancel()
+		}()
+	}
+	defer cancel()
 
 	err := EnsureYtDlpInstalled()
 	if err != nil {
@@ -61,23 +72,33 @@ func Download(options DownloadOptions) error {
 	var playLists []string
 	if options.Input != "" {
 		playLists = playlist.GetPlaylistsFromPlaylistFile(options.Input)
-
 		if len(playLists) < 1 {
 			log.Warn("input file contains no playlist URLs", "file", options.Input)
 			return nil
 		}
 		log.Info("loaded playlists from file", "file", options.Input, "count", len(playLists))
-		log.Debug("playlist URLs from file", "urls", playLists)
 	}
 	playLists = slices.Concat(playLists, options.Playlists)
 
 	log.Info("total playlists to process", "count", len(playLists))
-	logging.Trace("all playlist URLs", "urls", playLists)
+
+	// Wrap OnTrackComplete so we can count failures for OnDownloadComplete
+	// without requiring the caller to do it.
+	var failedCount atomic.Uint32
+	userOnTrackComplete := options.Events.OnTrackComplete
+	options.Events.OnTrackComplete = func(id uint32, success bool) {
+		if !success {
+			failedCount.Add(1)
+		}
+		if userOnTrackComplete != nil {
+			userOnTrackComplete(id, success)
+		}
+	}
 
 	playlistMetadataChannel := MetadataExtractionStage(ctx, playLists)
 	downloadsChannel := DownloadPlaylistItemStage(ctx, options, playlistMetadataChannel)
 
-	completed := 0
+	completed := uint32(0)
 	for entry := range downloadsChannel {
 		completed++
 		log.Info("track download complete",
@@ -85,6 +106,12 @@ func Download(options DownloadOptions) error {
 			"title", entry.Title,
 			"total_completed", completed,
 		)
+	}
+
+	failed := failedCount.Load()
+
+	if options.Events.OnDownloadComplete != nil {
+		options.Events.OnDownloadComplete(completed, failed)
 	}
 
 	if ctx.Err() != nil {
@@ -101,11 +128,13 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 	downloadsChannel := make(chan playlist.PlaylistEntry, opts.Parallel)
 	sem := make(chan struct{}, opts.Parallel)
 
+	// Atomic counter to assign a unique UI id to each track across all playlists.
+	var idCounter atomic.Uint32
+
 	const maxRetries = 3
 
 	go func() {
 		for metadata := range playlistMetadataChannel {
-			// Check for cancellation between playlists
 			if ctx.Err() != nil {
 				log.Debug("skipping playlist due to shutdown", "playlist_id", metadata.ID)
 				break
@@ -120,7 +149,6 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 				"track_count", trackCount,
 			)
 
-			// Create output directory before any downloads start.
 			playlistDir := filepath.Join(opts.Output, sanitizedPlaylistTitle)
 			if err := os.MkdirAll(playlistDir, 0o755); err != nil {
 				log.Error("failed to create playlist directory",
@@ -130,15 +158,9 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 				continue
 			}
 
-			// Each playlist gets its own archive file so yt-dlp skips
-			// already-downloaded videos on retry/restart.
-			// Safe for concurrent use: each goroutine downloads a unique video ID,
-			// so there's no risk of duplicate work. Appends of short lines (one
-			// archive entry like "youtube dQw4w9WgXcQ\n") are effectively atomic.
 			archivePath := filepath.Join(playlistDir, ".download-archive")
 
 			for i, entry := range metadata.Entries {
-				// Check for cancellation between tracks
 				if ctx.Err() != nil {
 					log.Debug("stopping track dispatch due to shutdown", "playlist_id", metadata.ID)
 					break
@@ -146,20 +168,23 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 
 				trackNum := i + 1
 				wg.Add(1)
-				sem <- struct{}{} // acquire semaphore slot
+				sem <- struct{}{}
 
 				go func(playlistEntry playlist.PlaylistEntry, num int) {
 					defer wg.Done()
-					defer func() { <-sem }() // release slot
+					defer func() { <-sem }()
 
-					// Check for cancellation before starting download
 					if ctx.Err() != nil {
 						return
 					}
 
-					// Use yt-dlp's %(title)s placeholder for file naming.
-					// This lets yt-dlp sanitize the filename itself and avoids
-					// baking the title (which may contain illegal chars) into the path.
+					trackID := idCounter.Add(1)
+
+					// Notify UI that a new track has been discovered.
+					if opts.Events.OnTrackDiscovered != nil {
+						opts.Events.OnTrackDiscovered(trackID, playlistEntry.Title)
+					}
+
 					outputTemplate := filepath.Join(playlistDir, "%(title)s.%(ext)s")
 
 					dlOpt := DownloadOption{
@@ -171,6 +196,12 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 						FormatSelector:      "bestaudio/best",
 						AudioQuality:        "0",
 						ArchivePath:         archivePath,
+						Ctx:                 ctx,
+						ProgressCallback: func(percent float32) {
+							if opts.Events.OnTrackProgress != nil {
+								opts.Events.OnTrackProgress(trackID, percent)
+							}
+						},
 					}
 
 					log.Info("downloading track",
@@ -184,13 +215,10 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 
 					var err error
 					for attempt := 1; attempt <= maxRetries; attempt++ {
-						// Check for cancellation before each retry
 						if ctx.Err() != nil {
 							return
 						}
-
 						err = DownloadPlaylist(dlOpt)
-
 						if err == nil {
 							break
 						}
@@ -199,7 +227,6 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 							log.Warn("download attempt failed, retrying",
 								"playlist_id", metadata.ID,
 								"video_id", playlistEntry.ID,
-								"video_title", playlistEntry.Title,
 								"attempt", attempt,
 								"backoff", backoff,
 								"error", err,
@@ -212,14 +239,16 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 
 					if err != nil {
 						log.Error("download failed after retries",
-							"playlist_id", metadata.ID,
 							"video_id", playlistEntry.ID,
 							"video_title", playlistEntry.Title,
-							"progress", fmt.Sprintf("%d/%d", num, trackCount),
 							"attempts", maxRetries,
 							"duration", duration,
 							"error", err,
 						)
+						// OnTrackComplete is the wrapped version that counts failures.
+						if opts.Events.OnTrackComplete != nil {
+							opts.Events.OnTrackComplete(trackID, false)
+						}
 						return
 					}
 
@@ -230,8 +259,12 @@ func DownloadPlaylistItemStage(ctx context.Context, opts DownloadOptions, playli
 						"progress", fmt.Sprintf("%d/%d", num, trackCount),
 						"duration", duration,
 					)
-					downloadsChannel <- playlistEntry
 
+					if opts.Events.OnTrackComplete != nil {
+						opts.Events.OnTrackComplete(trackID, true)
+					}
+
+					downloadsChannel <- playlistEntry
 				}(entry, trackNum)
 			}
 		}
@@ -252,7 +285,6 @@ func MetadataExtractionStage(ctx context.Context, playLists []string) chan playl
 		go func(url string) {
 			defer wg.Done()
 
-			// Check for cancellation before starting
 			if ctx.Err() != nil {
 				return
 			}

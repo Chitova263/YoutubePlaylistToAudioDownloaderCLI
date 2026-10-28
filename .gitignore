@@ -1,3 +1,5 @@
 /binaries
 /output
 cookies.txt
+/desktop-wails/frontend/node_modules/
+/desktop-wails/frontend/dist/

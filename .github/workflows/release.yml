@@ -9,6 +9,9 @@ permissions:
   contents: write
 
 jobs:
+  # ── CLI ─────────────────────────────────────────────────────────────────────
+  # Builds the ripper CLI for all platforms via GoReleaser and creates the
+  # GitHub release.
   release:
     runs-on: ubuntu-latest
     steps:
@@ -32,3 +35,82 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Desktop app (Windows) ───────────────────────────────────────────────────
+  # Builds the Wails desktop app on Windows (requires CGO + WebView2) and
+  # attaches the exe to the release that GoReleaser just created.
+  desktop-windows:
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: desktop-wails/frontend
+
+      - name: Build Wails app
+        run: wails build
+        working-directory: desktop-wails
+
+      - name: Upload desktop app to release
+        run: gh release upload "${{ github.ref_name }}" "desktop-wails/build/bin/YoutubePlaylistDownloader.exe" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Desktop app (macOS universal) ───────────────────────────────────────────
+  # Builds a universal binary (Intel + Apple Silicon) using Wails on a macOS
+  # runner and attaches a zipped .app bundle to the release.
+  # Note: the app is unsigned — users will need to right-click → Open on first
+  # launch to bypass Gatekeeper. Code signing can be added later via Apple
+  # Developer certificates + notarytool.
+  desktop-macos:
+    needs: release
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: desktop-wails/frontend
+
+      - name: Build Wails app (universal)
+        run: wails build -platform darwin/universal
+        working-directory: desktop-wails
+
+      - name: Package .app as zip
+        run: zip -r YoutubePlaylistDownloader-macos.zip YoutubePlaylistDownloader.app
+        working-directory: desktop-wails/build/bin
+
+      - name: Upload to release
+        run: gh release upload "${{ github.ref_name }}" "desktop-wails/build/bin/YoutubePlaylistDownloader-macos.zip" --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
