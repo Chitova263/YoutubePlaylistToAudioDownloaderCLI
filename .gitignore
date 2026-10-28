@@ -1,5 +1,10 @@
 /binaries
 /output
 cookies.txt
+
+# Wails desktop app
+/desktop-wails/binaries/
+/desktop-wails/build/
 /desktop-wails/frontend/node_modules/
 /desktop-wails/frontend/dist/
+/desktop-wails/frontend/package.json.md5
